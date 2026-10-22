@@ -1,97 +1,57 @@
-
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+SETORES = ["Secretaria", "Coordenação", "Laboratório"]
 
 class JanelaPrincipal(QWidget):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("Portaria Digital")
+        self.resize(820, 520)
 
-        self.setWindowTitle("Registro de Visitantes")
-        self.resize(520, 450)
-
-        self.registros = []
-
-        self.titulo = QLabel("Recepção - Registro de Visitantes")
-
+        # ---------- widgets ----------
+        self.campo_cpf = QLineEdit()
+        self.campo_cpf.setPlaceholderText("Somente números")
+        self.campo_cpf.setMaxLength(14)
+        self.campo_cpf.setStyleSheet("background-color: #FFFFFF; color: black;")
         self.campo_nome = QLineEdit()
-        self.campo_nome.setPlaceholderText("Nome completo")
+        self.campo_nome.setStyleSheet("background-color: #FFFFFF; color: black;")
+        self.campo_nome.setPlaceholderText("Escreva seu nome aqui")
+        self.combo_setor = QComboBox()
+        self.combo_setor.addItem("Selecione um setor")
+        self.combo_setor.addItems(SETORES)
+        self.combo_setor.setStyleSheet("background-color: #FFFFFF; color: black;")
+        
+        self.botao_entrada = QPushButton("Registrar entrada")
+        self.botao_entrada.setStyleSheet("background-color: #FF0000 ; color: white; border-radius: 8px; padding: 6px 12px; ")
 
-        self.combo_destino = QComboBox()
-        self.combo_destino.addItems([
-            "Selecione um setor",
-            "Secretaria",
-            "Coordenação",
-            "Laboratório",
-        ])
-
-        self.botao_cadastrar = QPushButton("Registrar visita")
         self.botao_limpar = QPushButton("Limpar campos")
+        self.mensagem = QLabel("Informe o CPF do visitante.")
 
-        self.mensagem = QLabel("Preencha os campos e registre a visita.")
-        self.lista = QListWidget()
-        self.contador = QLabel("Visitas nesta sessão: 0")
-
+        self.botao_limpar.setStyleSheet(
+        "background-color: #008000; color: white; border-radius: 8px; padding: 6px 12px;"
+        )
+        # ---------- layouts ----------
         formulario = QFormLayout()
+        formulario.addRow("CPF:", self.campo_cpf)
         formulario.addRow("Nome:", self.campo_nome)
-        formulario.addRow("Destino:", self.combo_destino)
+        formulario.addRow("Setor:", self.combo_setor)
+
+        botoes = QHBoxLayout()
+        botoes.addWidget(self.botao_entrada)
+        botoes.addWidget(self.botao_limpar)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.titulo)
         layout.addLayout(formulario)
-        layout.addWidget(self.botao_cadastrar)
-        layout.addWidget(self.botao_limpar)
+        layout.addLayout(botoes)
         layout.addWidget(self.mensagem)
-        layout.addWidget(QLabel("Visitantes registrados:"))
-        layout.addWidget(self.lista)
-        layout.addWidget(self.contador)
-
+        layout.addStretch()
         self.setLayout(layout)
-
-        self.botao_cadastrar.clicked.connect(self.registrar_visita)
-        self.botao_limpar.clicked.connect(self.limpar_campos)
-
-    def registrar_visita(self):
-        nome = self.campo_nome.text().strip()
-        destino = self.combo_destino.currentText()
-
-        if not nome:
-            self.mensagem.setText("Informe o nome do visitante.")
-            self.campo_nome.setFocus()
-            return
-
-        if self.combo_destino.currentIndex() == 0:
-            self.mensagem.setText("Selecione o setor de destino.")
-            return
-
-        registro = {"nome": nome, "destino": destino}
-        self.registros.append(registro)
-
-        self.lista.addItem(f"{nome} - {destino}")
-        self.contador.setText(
-            f"Visitas nesta sessão: {len(self.registros)}"
-        )
-
-        self.mensagem.setText("Visita registrada com sucesso!")
-        self.limpar_campos()
-
-    def limpar_campos(self):
-        self.campo_nome.clear()
-        self.combo_destino.setCurrentIndex(0)
-        self.campo_nome.setFocus()
-
-
-if __name__ == "__main__":
-    app = QApplication([])
-    janela = JanelaPrincipal()
-    janela.show()
-    app.exec()

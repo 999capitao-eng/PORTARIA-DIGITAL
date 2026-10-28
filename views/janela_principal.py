@@ -1,4 +1,3 @@
-
 from datetime import datetime
 
 from PySide6.QtWidgets import (
@@ -16,17 +15,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from portaria.validacao import (
+    cpf_valido,
+    mascarar_documento,
+    normalizar_documento,
+)
+
 SETORES = ["secretaria", "coordenação", "laboratório"]
 CRACHAS = [f"V-{n:02d}" for n in range(1, 11)]
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
-
-
-def somente_digitos(texto):
-    return "".join(c for c in texto if c.isdigit())
-
-
-def mascarar_cpf(cpf):
-    return f"***.{cpf[3:6]}.{cpf[6:9]}-**"
 
 
 class JanelaPrincipal(QWidget):
@@ -66,11 +63,15 @@ class JanelaPrincipal(QWidget):
 
         # Tabela de presentes
         self.campo_filtro = QLineEdit()
-        self.campo_filtro.setPlaceholderText("Filtrar por nome ou setor")
+        self.campo_filtro.setPlaceholderText(
+            "Filtrar por nome ou setor"
+        )
 
         self.tabela = QTableWidget(0, len(COLUNAS))
         self.tabela.setHorizontalHeaderLabels(COLUNAS)
-        self.tabela.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tabela.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
         self.tabela.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -79,7 +80,9 @@ class JanelaPrincipal(QWidget):
         )
         self.tabela.verticalHeader().setVisible(False)
 
-        self.botao_saida = QPushButton("Registrar saída da visita selecionada")
+        self.botao_saida = QPushButton(
+            "Registrar saída da visita selecionada"
+        )
         self.contador = QLabel()
 
         layout = QVBoxLayout()
@@ -94,56 +97,78 @@ class JanelaPrincipal(QWidget):
         self.setLayout(layout)
 
         # Eventos
-        self.campo_cpf.editingFinished.connect(self.buscar_visitante)
-        self.botao_entrada.clicked.connect(self.registrar_entrada)
-        self.botao_limpar.clicked.connect(self.limpar_campos)
-        self.botao_saida.clicked.connect(self.registrar_saida)
-        self.campo_filtro.textChanged.connect(self.atualizar_tabela)
+        self.campo_cpf.editingFinished.connect(
+            self.buscar_visitante
+        )
+        self.botao_entrada.clicked.connect(
+            self.registrar_entrada
+        )
+        self.botao_limpar.clicked.connect(
+            self.limpar_campos
+        )
+        self.botao_saida.clicked.connect(
+            self.registrar_saida
+        )
+        self.campo_filtro.textChanged.connect(
+            self.atualizar_tabela
+        )
 
         self.atualizar_tabela()
 
     def buscar_visitante(self):
-        cpf = somente_digitos(self.campo_cpf.text())
+        cpf = normalizar_documento(self.campo_cpf.text())
+
         if cpf in self.visitantes:
             self.campo_nome.setText(self.visitantes[cpf])
+            self.campo_nome.setReadOnly(True)
             self.mensagem.setText(
                 "Visitante já cadastrado. Escolha o setor."
             )
+        else:
+            self.campo_nome.setReadOnly(False)
 
     def registrar_entrada(self):
-        cpf = somente_digitos(self.campo_cpf.text())
+        cpf = normalizar_documento(self.campo_cpf.text())
         nome = " ".join(self.campo_nome.text().split())
 
-        if len(cpf) != 11:
-            self.mensagem.setText("O CPF precisa ter 11 dígitos.")
+        if not cpf_valido(cpf):
+            self.mensagem.setText(
+                "CPF inválido. Confira os 11 dígitos."
+            )
             self.campo_cpf.setFocus()
             return
 
         if not nome:
-            self.mensagem.setText("Informe o nome do visitante.")
+            self.mensagem.setText(
+                "Informe o nome do visitante."
+            )
             self.campo_nome.setFocus()
             return
 
         if self.combo_setor.currentIndex() == 0:
-            self.mensagem.setText("Selecione o setor de destino.")
+            self.mensagem.setText(
+                "Selecione o setor de destino."
+            )
             return
 
         if any(
-            v["cpf"] == cpf and v["saida"] is None
-            for v in self.visitas
+            v["cpf"] == cpf for v in self.presentes()
         ):
             self.mensagem.setText(
-                "Este visitante já possui uma visita em aberto."
+                f"{nome} já está no prédio. "
+                "Registre a saída antes."
             )
             return
 
         if not self.crachas_livres:
             self.mensagem.setText(
-                "Não há crachá disponível. Aguarde uma devolução."
+                "Não há crachá disponível. "
+                "Aguarde uma devolução."
             )
             return
 
-        self.visitantes[cpf] = nome
+        self.visitantes.setdefault(cpf, nome)
+
         cracha = self.crachas_livres.pop(0)
 
         self.visitas.append({
@@ -172,16 +197,26 @@ class JanelaPrincipal(QWidget):
             return
 
         item = self.tabela.item(linha, 0)
+
         if item is None:
-            self.mensagem.setText("Selecione uma visita válida.")
+            self.mensagem.setText(
+                "Selecione uma visita válida."
+            )
             return
 
         visita_id = int(item.text())
 
         for visita in self.visitas:
-            if visita["id"] == visita_id and visita["saida"] is None:
-                visita["saida"] = datetime.now().strftime("%H:%M:%S")
-                self.crachas_livres.append(visita["cracha"])
+            if (
+                visita["id"] == visita_id
+                and visita["saida"] is None
+            ):
+                visita["saida"] = datetime.now().strftime(
+                    "%H:%M:%S"
+                )
+                self.crachas_livres.append(
+                    visita["cracha"]
+                )
                 self.mensagem.setText(
                     f"Saída registrada. Crachá "
                     f"{visita['cracha']} devolvido."
@@ -215,7 +250,7 @@ class JanelaPrincipal(QWidget):
             valores = [
                 visita["id"],
                 self.visitantes[visita["cpf"]],
-                mascarar_cpf(visita["cpf"]),
+                mascarar_documento(visita["cpf"]),
                 visita["setor"],
                 visita["cracha"],
                 visita["entrada"],
@@ -223,10 +258,13 @@ class JanelaPrincipal(QWidget):
 
             for j, valor in enumerate(valores):
                 self.tabela.setItem(
-                    i, j, QTableWidgetItem(str(valor))
+                    i,
+                    j,
+                    QTableWidgetItem(str(valor)),
                 )
 
-        self.tabela.clearSelection()
+        self.tabela.setCurrentCell(-1, -1)
+
         self.contador.setText(
             f"No prédio: {len(self.presentes())} | "
             f"Crachás livres: {len(self.crachas_livres)}"
@@ -235,5 +273,6 @@ class JanelaPrincipal(QWidget):
     def limpar_campos(self):
         self.campo_cpf.clear()
         self.campo_nome.clear()
+        self.campo_nome.setReadOnly(False)
         self.combo_setor.setCurrentIndex(0)
         self.campo_cpf.setFocus()

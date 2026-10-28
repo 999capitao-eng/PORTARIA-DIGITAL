@@ -1,3 +1,5 @@
+
+import sqlite3
 from datetime import datetime
 
 from PySide6.QtWidgets import (
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -21,21 +24,19 @@ from portaria.validacao import (
     normalizar_documento,
 )
 
-SETORES = ["secretaria", "coordenação", "laboratório"]
-CRACHAS = [f"V-{n:02d}" for n in range(1, 11)]
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
 
 
+def agora():
+    return datetime.now().isoformat(sep=" ", timespec="seconds")
+
+
 class JanelaPrincipal(QWidget):
-    def __init__(self):
+    def __init__(self, conn):
         super().__init__()
+        self.conn = conn
         self.setWindowTitle("Portaria Digital")
         self.resize(830, 520)
-
-        self.visitantes = {}
-        self.visitas = []
-        self.crachas_livres = list(CRACHAS)
-        self.proximo_id = 1
 
         # Formulário
         self.campo_cpf = QLineEdit()
@@ -45,8 +46,6 @@ class JanelaPrincipal(QWidget):
         self.campo_nome = QLineEdit()
 
         self.combo_setor = QComboBox()
-        self.combo_setor.addItem("Selecionar um setor")
-        self.combo_setor.addItems(SETORES)
 
         self.botao_entrada = QPushButton("Registrar entrada")
         self.botao_limpar = QPushButton("Limpar campos")
@@ -113,13 +112,29 @@ class JanelaPrincipal(QWidget):
             self.atualizar_tabela
         )
 
+        self.carregar_setores()
         self.atualizar_tabela()
+
+    def carregar_setores(self):
+        self.combo_setor.clear()
+        self.combo_setor.addItem("Selecione um setor", None)
+
+        linhas = self.conn.execute(
+            "SELECT id, nome FROM setor WHERE ativo = 1 ORDER BY nome"
+        ).fetchall()
+
+        for linha in linhas:
+            self.combo_setor.addItem(linha["nome"], linha["id"])
 
     def buscar_visitante(self):
         cpf = normalizar_documento(self.campo_cpf.text())
 
-        if cpf in self.visitantes:
-            self.campo_nome.setText(self.visitantes[cpf])
+        linha = self.conn.execute(
+            "SELECT nome FROM visitante WHERE documento = ?", (cpf,)
+        ).fetchone()
+
+        if linha:
+            self.campo_nome.setText(linha["nome"])
             self.campo_nome.setReadOnly(True)
             self.mensagem.setText(
                 "Visitante já cadastrado. Escolha o setor."
@@ -130,6 +145,7 @@ class JanelaPrincipal(QWidget):
     def registrar_entrada(self):
         cpf = normalizar_documento(self.campo_cpf.text())
         nome = " ".join(self.campo_nome.text().split())
+        setor_id = self.combo_setor.currentData()
 
         if not cpf_valido(cpf):
             self.mensagem.setText(
@@ -145,115 +161,98 @@ class JanelaPrincipal(QWidget):
             self.campo_nome.setFocus()
             return
 
-        if self.combo_setor.currentIndex() == 0:
+        if setor_id is None:
             self.mensagem.setText(
                 "Selecione o setor de destino."
             )
             return
 
-        if any(
-            v["cpf"] == cpf for v in self.presentes()
-        ):
+        visitante = self.conn.execute(
+            "SELECT id FROM visitante WHERE documento = ?", (cpf,)
+        ).fetchone()
+
+        if visitante is None:
+            visitante_id = self.conn.execute(
+                "INSERT INTO visitante (nome, documento) VALUES (?, ?)",
+                (nome, cpf),
+            ).lastrowid
+        else:
+            visitante_id = visitante["id"]
+
+        aberta = self.conn.execute(
+            "SELECT 1 FROM visita WHERE visitante_id = ? AND saida IS NULL",
+            (visitante_id,),
+        ).fetchone()
+
+        if aberta:
             self.mensagem.setText(
-                f"{nome} já está no prédio. "
-                "Registre a saída antes."
+                f"{nome} já está no prédio. Registre a saída antes."
             )
             return
 
-        if not self.crachas_livres:
+        cracha = self.conn.execute(
+            "SELECT id, codigo FROM cracha WHERE situacao = 'disponivel' "
+            "ORDER BY codigo LIMIT 1"
+        ).fetchone()
+
+        if cracha is None:
             self.mensagem.setText(
-                "Não há crachá disponível. "
-                "Aguarde uma devolução."
+                "Não há crachá disponível. Aguarde uma devolução."
             )
             return
 
-        self.visitantes.setdefault(cpf, nome)
+        self.conn.execute(
+            "INSERT INTO visita (visitante_id, setor_id, cracha_id, entrada) "
+            "VALUES (?, ?, ?, ?)",
+            (visitante_id, setor_id, cracha["id"], agora()),
+        )
 
-        cracha = self.crachas_livres.pop(0)
+        self.conn.execute(
+            "UPDATE cracha SET situacao = 'em_uso' WHERE id = ?",
+            (cracha["id"],),
+        )
 
-        self.visitas.append({
-            "id": self.proximo_id,
-            "cpf": cpf,
-            "setor": self.combo_setor.currentText(),
-            "cracha": cracha,
-            "entrada": datetime.now().strftime("%H:%M:%S"),
-            "saida": None,
-        })
+        self.conn.commit()
 
-        self.proximo_id += 1
         self.limpar_campos()
         self.mensagem.setText(
-            f"Entrada registrada. Entregue o crachá {cracha}."
+            f"Entrada registrada. Entregue o crachá {cracha['codigo']}."
         )
         self.atualizar_tabela()
 
     def registrar_saida(self):
-        linha = self.tabela.currentRow()
-
-        if linha < 0:
-            self.mensagem.setText(
-                "Selecione uma visita na tabela."
-            )
-            return
-
-        item = self.tabela.item(linha, 0)
-
-        if item is None:
-            self.mensagem.setText(
-                "Selecione uma visita válida."
-            )
-            return
-
-        visita_id = int(item.text())
-
-        for visita in self.visitas:
-            if (
-                visita["id"] == visita_id
-                and visita["saida"] is None
-            ):
-                visita["saida"] = datetime.now().strftime(
-                    "%H:%M:%S"
-                )
-                self.crachas_livres.append(
-                    visita["cracha"]
-                )
-                self.mensagem.setText(
-                    f"Saída registrada. Crachá "
-                    f"{visita['cracha']} devolvido."
-                )
-                break
-
-        self.atualizar_tabela()
-
-    def presentes(self):
-        return [
-            v for v in self.visitas
-            if v["saida"] is None
-        ]
+        self.mensagem.setText(
+            "A saída será gravada na Etapa 13."
+        )
 
     def atualizar_tabela(self):
-        termo = self.campo_filtro.text().strip().lower()
-        linhas = []
+        termo = f"%{self.campo_filtro.text().strip()}%"
 
-        for visita in self.presentes():
-            texto = (
-                f"{self.visitantes[visita['cpf']]} "
-                f"{visita['setor']}"
-            ).lower()
-
-            if termo in texto:
-                linhas.append(visita)
+        linhas = self.conn.execute(
+            """
+            SELECT v.id, p.nome, p.documento, s.nome AS setor,
+                   c.codigo AS cracha, v.entrada
+              FROM visita v
+              JOIN visitante p ON p.id = v.visitante_id
+              JOIN setor s     ON s.id = v.setor_id
+              JOIN cracha c    ON c.id = v.cracha_id
+             WHERE v.saida IS NULL
+               AND (p.nome LIKE ? OR s.nome LIKE ?)
+             ORDER BY v.entrada
+            """,
+            (termo, termo),
+        ).fetchall()
 
         self.tabela.setRowCount(len(linhas))
 
-        for i, visita in enumerate(linhas):
+        for i, l in enumerate(linhas):
             valores = [
-                visita["id"],
-                self.visitantes[visita["cpf"]],
-                mascarar_documento(visita["cpf"]),
-                visita["setor"],
-                visita["cracha"],
-                visita["entrada"],
+                l["id"],
+                l["nome"],
+                mascarar_documento(l["documento"]),
+                l["setor"],
+                l["cracha"],
+                l["entrada"],
             ]
 
             for j, valor in enumerate(valores):
@@ -265,9 +264,16 @@ class JanelaPrincipal(QWidget):
 
         self.tabela.setCurrentCell(-1, -1)
 
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM visita WHERE saida IS NULL"
+        ).fetchone()[0]
+
+        livres = self.conn.execute(
+            "SELECT COUNT(*) FROM cracha WHERE situacao = 'disponivel'"
+        ).fetchone()[0]
+
         self.contador.setText(
-            f"No prédio: {len(self.presentes())} | "
-            f"Crachás livres: {len(self.crachas_livres)}"
+            f"No prédio: {total} | Crachás livres: {livres}"
         )
 
     def limpar_campos(self):

@@ -1,14 +1,17 @@
+import csv
 import logging
 import sqlite3
+from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
     QDateEdit,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -29,10 +32,17 @@ from portaria import repositorio as repo
 from portaria import servicos
 from portaria.erros import RegraNegocioError
 from portaria.ui.dialogo_setor import DialogoSetor
-from portaria.ui.tema import gerar_folha, salvar_tema, tema_salvo
-from portaria.validacao import mascarar_documento, normalizar_documento
+from portaria.ui.tema import ROTULOS, TEMAS, gerar_folha, salvar_tema, tema_salvo
+from portaria.validacao import cpf_valido, mascarar_documento, normalizar_documento
 
 log = logging.getLogger(__name__)
+
+PASTA_ICONES = Path(__file__).with_name("icones")
+
+
+def icone(nome):
+    caminho = PASTA_ICONES / nome
+    return QIcon(str(caminho)) if caminho.exists() else QIcon()
 FALHA = object()
 
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
@@ -45,7 +55,7 @@ COLUNAS_SETORES = [
 ]
 
 
-def nova_tabela(colunas):
+def nova_tabela(colunas, ordenavel=False):
     tabela = QTableWidget(0, len(colunas))
     tabela.setHorizontalHeaderLabels(colunas)
     tabela.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -57,17 +67,29 @@ def nova_tabela(colunas):
     )
     tabela.verticalHeader().setVisible(False)
     tabela.setAlternatingRowColors(True)
+    if ordenavel:
+        tabela.setSortingEnabled(True)
+        # -1: mantém a ordem do SQL até o usuário clicar num cabeçalho
+        tabela.horizontalHeader().setSortIndicator(
+            -1, Qt.SortOrder.AscendingOrder
+        )
     return tabela
 
 
 def preencher_tabela(tabela, linhas):
+    ordenavel = tabela.isSortingEnabled()
+    tabela.setSortingEnabled(False)  # senão as linhas mudam de lugar no meio
     tabela.setRowCount(len(linhas))
     for i, valores in enumerate(linhas):
         for j, valor in enumerate(valores):
-            tabela.setItem(
-                i, j,
-                QTableWidgetItem("" if valor is None else str(valor))
-            )
+            item = QTableWidgetItem()
+            if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+                # número de verdade: ordena 9, 10, 100 (e não "10", "100", "9")
+                item.setData(Qt.ItemDataRole.DisplayRole, valor)
+            else:
+                item.setText("" if valor is None else str(valor))
+            tabela.setItem(i, j, item)
+    tabela.setSortingEnabled(ordenavel)
     tabela.setCurrentCell(-1, -1)
 
 
@@ -102,18 +124,25 @@ class JanelaPrincipal(QMainWindow):
 
     def montar_menu(self):
         menu = self.menuBar().addMenu("&Exibir")
-        self.acao_tema_escuro = QAction("Tema &escuro", self)
-        self.acao_tema_escuro.setCheckable(True)
-        self.acao_tema_escuro.setShortcut("Ctrl+T")
-        self.acao_tema_escuro.setChecked(tema_salvo() == "escuro")
-        self.acao_tema_escuro.toggled.connect(self.trocar_tema)
-        menu.addAction(self.acao_tema_escuro)
+        grupo = QActionGroup(self)
+        grupo.setExclusive(True)
+        self.acoes_tema = {}
+        atual = tema_salvo()
+        for numero, nome in enumerate(TEMAS, start=1):
+            acao = QAction(ROTULOS.get(nome, nome), self)
+            acao.setCheckable(True)
+            acao.setShortcut(f"Ctrl+{numero}")
+            acao.setChecked(nome == atual)
+            acao.triggered.connect(
+                lambda _marcado=False, n=nome: self.trocar_tema(n)
+            )
+            grupo.addAction(acao)
+            menu.addAction(acao)
+            self.acoes_tema[nome] = acao
 
-    def trocar_tema(self, escuro):
-        nome = "escuro" if escuro else "claro"
+    def trocar_tema(self, nome):
         QApplication.instance().setStyleSheet(gerar_folha(nome))
         salvar_tema(nome)
-
     def montar_aba_portaria(self):
         self.campo_cpf = QLineEdit()
         self.campo_cpf.setPlaceholderText("Somente números")
@@ -134,7 +163,12 @@ class JanelaPrincipal(QMainWindow):
         self.mensagem.setWordWrap(True)
 
         formulario = QFormLayout()
-        formulario.addRow("CPF:", self.campo_cpf)
+        self.botao_historico = estilizar_botao(QPushButton("&Ver histórico"))
+        self.botao_historico.clicked.connect(self.ver_historico_visitante)
+        linha_cpf = QHBoxLayout()
+        linha_cpf.addWidget(self.campo_cpf, 1)
+        linha_cpf.addWidget(self.botao_historico)
+        formulario.addRow("CPF:", linha_cpf)
         formulario.addRow("Nome:", self.campo_nome)
         formulario.addRow("Setor:", self.combo_setor)
 
@@ -148,7 +182,8 @@ class JanelaPrincipal(QMainWindow):
         self.tabela = nova_tabela(COLUNAS)
 
         self.botao_saida = estilizar_botao(
-            QPushButton("Registrar &saída da visita selecionada")
+            QPushButton("Registrar &saída da visita selecionada"),
+            "secundario",
         )
         self.contador = QLabel()
 
@@ -167,6 +202,17 @@ class JanelaPrincipal(QMainWindow):
         self.botao_limpar.clicked.connect(self.limpar_campos)
         self.botao_saida.clicked.connect(self.registrar_saida)
         self.campo_filtro.textChanged.connect(self.atualizar_tabela)
+        self.tabela.itemSelectionChanged.connect(self.atualizar_botao_saida)
+        self.botao_saida.setEnabled(False)
+
+        # 30.9: ícones próprios (se o arquivo existir)
+        for botao, arquivo in (
+            (self.botao_entrada, "entrada.svg"),
+            (self.botao_saida, "saida.svg"),
+        ):
+            ico = icone(arquivo)
+            if not ico.isNull():
+                botao.setIcon(ico)
 
         aba = QWidget()
         aba.setLayout(layout)
@@ -184,7 +230,9 @@ class JanelaPrincipal(QMainWindow):
         self.campo_busca = QLineEdit()
         self.campo_busca.setPlaceholderText("Nome ou setor")
         botao_filtrar = estilizar_botao(QPushButton("&Filtrar"))
-        self.tabela_historico = nova_tabela(COLUNAS_HISTORICO)
+        botao_exportar = estilizar_botao(QPushButton("&Exportar CSV"))
+        botao_exportar.clicked.connect(self.exportar_historico)
+        self.tabela_historico = nova_tabela(COLUNAS_HISTORICO, ordenavel=True)
         self.resumo = QLabel()
         self.resumo.setWordWrap(True)
 
@@ -198,6 +246,7 @@ class JanelaPrincipal(QMainWindow):
         filtros.addWidget(self.data_fim)
         filtros.addWidget(self.campo_busca, 1)
         filtros.addWidget(botao_filtrar)
+        filtros.addWidget(botao_exportar)
 
         layout = QVBoxLayout()
         layout.addLayout(filtros)
@@ -334,7 +383,7 @@ class JanelaPrincipal(QMainWindow):
     def carregar_setores(self):
         setores = self._executar(repo.listar_setores_ativos, self.conn)
         if setores is FALHA:
-            return
+            return False
 
         selecionado = self.combo_setor.currentData()
         self.combo_setor.clear()
@@ -347,7 +396,7 @@ class JanelaPrincipal(QMainWindow):
                 setor["id"],
             )
             if ocupacao is FALHA:
-                return
+                return False
             self.combo_setor.addItem(
                 f"{setor['nome']} "
                 f"({ocupacao}/{setor['lotacao_maxima']})",
@@ -357,17 +406,59 @@ class JanelaPrincipal(QMainWindow):
         self.combo_setor.setCurrentIndex(
             max(self.combo_setor.findData(selecionado), 0)
         )
+        return True
+
+    def ver_historico_visitante(self):
+        cpf = normalizar_documento(self.campo_cpf.text())
+        if not cpf_valido(cpf):
+            self._avisar("CPF inválido. Confira os 11 dígitos.")
+            return
+
+        visitas = self._executar(
+            repo.historico_do_visitante, self.conn, cpf, 5
+        )
+        if visitas is FALHA:
+            return
+
+        if not visitas:
+            QMessageBox.information(
+                self,
+                "Portaria Digital",
+                "Nenhuma visita registrada para este CPF.",
+            )
+            return
+
+        linhas = [
+            f"{v['entrada']}  |  {v['setor']}  |  "
+            f"saída: {v['saida'] or 'no prédio'}"
+            for v in visitas
+        ]
+        QMessageBox.information(
+            self,
+            "Portaria Digital",
+            f"Últimas visitas de {mascarar_documento(cpf)}:\n\n"
+            + "\n".join(linhas),
+        )
+
+    def atualizar_botao_saida(self):
+        self.botao_saida.setEnabled(self.tabela.currentRow() >= 0)
 
     def atualizar_tudo(self):
-        self.carregar_setores()
-        self.atualizar_tabela()
-        self.atualizar_historico()
-        self.atualizar_setores()
+        etapas = (
+            self.carregar_setores,
+            self.atualizar_tabela,
+            self.atualizar_historico,
+            self.atualizar_setores,
+        )
+        for etapa in etapas:
+            if not etapa():
+                return False  # um único alerta: o primeiro erro interrompe
+        return True
 
     def atualizar_tabela(self):
         presentes = self._executar(repo.listar_presentes, self.conn)
         if presentes is FALHA:
-            return
+            return False
 
         termo = self.campo_filtro.text().strip().lower()
         preencher_tabela(
@@ -391,12 +482,15 @@ class JanelaPrincipal(QMainWindow):
             repo.contar_crachas_por_situacao, self.conn
         )
         if crachas is FALHA:
-            return
+            return False
 
         self.contador.setText(
             f"No prédio: {len(presentes)} | "
             f"Crachás livres: {crachas.get('disponivel', 0)}"
         )
+
+        self.atualizar_botao_saida()
+        return True
 
     def atualizar_historico(self):
         inicio = self.data_inicio.date().toString("yyyy-MM-dd")
@@ -410,7 +504,7 @@ class JanelaPrincipal(QMainWindow):
             self.campo_busca.text(),
         )
         if linhas is FALHA:
-            return
+            return False
 
         preencher_tabela(
             self.tabela_historico,
@@ -433,7 +527,7 @@ class JanelaPrincipal(QMainWindow):
             repo.resumo_por_setor, self.conn, inicio, fim
         )
         if resumo is FALHA:
-            return
+            return False
 
         partes = []
         for item in resumo:
@@ -445,11 +539,65 @@ class JanelaPrincipal(QMainWindow):
         self.resumo.setText(
             "Resumo do período. " + "; ".join(partes)
         )
+        return True
 
+    def exportar_historico(self):
+        inicio = self.data_inicio.date().toString("yyyy-MM-dd")
+        fim = self.data_fim.date().toString("yyyy-MM-dd")
+
+        linhas = self._executar(
+            repo.listar_historico,
+            self.conn,
+            inicio,
+            fim,
+            self.campo_busca.text(),
+        )
+        if linhas is FALHA:
+            return
+
+        if not linhas:
+            self._avisar("Não há visitas no filtro atual para exportar.")
+            return
+
+        caminho, _ = QFileDialog.getSaveFileName(
+            self, "Exportar histórico", "historico.csv", "CSV (*.csv)"
+        )
+        if not caminho:
+            return  # usuário cancelou
+
+        try:
+            with open(caminho, "w", newline="", encoding="utf-8-sig") as arquivo:
+                escritor = csv.writer(arquivo, delimiter=";")
+                escritor.writerow(COLUNAS_HISTORICO)
+                for item in linhas:
+                    escritor.writerow([
+                        item["id"],
+                        item["nome"],
+                        mascarar_documento(item["documento"]),
+                        item["setor"],
+                        item["cracha"],
+                        item["entrada"],
+                        item["saida"] or "no prédio",
+                        "" if item["minutos"] is None else item["minutos"],
+                    ])
+        except OSError as erro:
+            log.exception("Falha ao exportar CSV para %s", caminho)
+            QMessageBox.critical(
+                self,
+                "Portaria Digital",
+                "Não foi possível gravar o arquivo. Se ele estiver aberto no "
+                "Excel, feche-o. Confira também se você tem permissão na pasta.\n\n"
+                f"Detalhe: {erro.strerror or erro}",
+            )
+            return
+
+        self.statusBar().showMessage(
+            f"{len(linhas)} visita(s) exportada(s) para {caminho}", 8000
+        )
     def atualizar_setores(self):
         setores = self._executar(repo.listar_setores, self.conn)
         if setores is FALHA:
-            return
+            return False
 
         self._setores = setores
         preencher_tabela(
@@ -465,6 +613,7 @@ class JanelaPrincipal(QMainWindow):
                 for setor in setores
             ],
         )
+        return True
 
     def setor_selecionado(self):
         linha = self.tabela_setores.currentRow()

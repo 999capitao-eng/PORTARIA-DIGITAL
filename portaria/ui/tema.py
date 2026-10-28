@@ -41,6 +41,29 @@ TEMAS = {
     },
 }
 
+TEMAS["institucional"] = {
+    **TEMAS["claro"],
+    "fundo": "#F2F6FA",
+    "superficie": "#FFFFFF",
+    "zebra": "#EAF1F8",
+    "texto": "#0F2540",
+    "texto_suave": "#40566F",
+    "borda": "#A9BBD0",
+    "primaria": "#004A8D",
+    "primaria_hover": "#003A70",
+    "primaria_texto": "#FFFFFF",
+    "selecao": "#FDE3BF",
+    "selecao_texto": "#0F2540",
+    "aviso_fundo": "#FFF1D6",
+    "aviso_texto": "#6B3A00",
+}
+
+ROTULOS = {
+    "claro": "Tema &claro",
+    "escuro": "Tema &escuro",
+    "institucional": "Tema &institucional",
+}
+
 _CHAVE = "tema"
 
 
@@ -168,6 +191,20 @@ QPushButton[variante="perigo"] {
 }
 QPushButton[variante="perigo"]:hover {
     background-color: $perigo_hover;
+}
+QPushButton[variante="secundario"] {
+    background-color: $superficie;
+    color: $texto;
+    border: 2px solid $primaria;
+}
+QPushButton[variante="secundario"]:hover {
+    background-color: $selecao;
+    color: $selecao_texto;
+}
+QPushButton:disabled, QPushButton[variante="secundario"]:disabled {
+    background-color: $fundo;
+    color: $texto_suave;
+    border: 1px dashed $borda;
 }
 QLabel {
     background: transparent;

@@ -32,3 +32,36 @@ def resumo_por_setor(conn, inicio: str, fim: str) -> list[Linha]:
         """,
         (inicio, fim),
     ).fetchall()
+
+def listar_setores(conn) -> list[Linha]:
+    """Todos os setores, inclusive os inativos, para a tela de gestão."""
+    return conn.execute(
+        """
+        SELECT s.id, s.nome, s.lotacao_maxima, s.ativo,
+               COUNT(v.id) AS total_visitas
+          FROM setor s
+          LEFT JOIN visita v ON v.setor_id = s.id
+         GROUP BY s.id
+         ORDER BY s.nome
+        """
+    ).fetchall()
+
+def inserir_setor(conn, nome: str, lotacao_maxima: int) -> int:
+    cur = conn.execute(
+        "INSERT INTO setor (nome, lotacao_maxima) VALUES (?, ?)", (nome, lotacao_maxima)
+    )
+    return cur.lastrowid
+
+def atualizar_setor(conn, setor_id: int, nome: str, lotacao_maxima: int, ativo: bool) -> None:
+    conn.execute(
+        "UPDATE setor SET nome = ?, lotacao_maxima = ?, ativo = ? WHERE id = ?",
+        (nome, lotacao_maxima, int(ativo), setor_id),
+    )
+
+def excluir_setor(conn, setor_id: int) -> None:
+    conn.execute("DELETE FROM setor WHERE id = ?", (setor_id,))
+
+def contar_visitas_do_setor(conn, setor_id: int) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM visita WHERE setor_id = ?", (setor_id,)
+    ).fetchone()[0]

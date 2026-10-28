@@ -1,12 +1,13 @@
 
-import sqlite3
 import logging
+import sqlite3
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDateEdit,
+    QDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 from portaria import repositorio as repo
 from portaria import servicos
 from portaria.erros import RegraNegocioError
+from portaria.ui.dialogo_setor import DialogoSetor
 from portaria.validacao import (
     mascarar_documento,
     normalizar_documento,
@@ -36,14 +38,12 @@ FALHA = object()
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
 
 COLUNAS_HISTORICO = [
-    "Visita",
-    "Nome",
-    "CPF",
-    "Setor",
-    "Crachá",
-    "Entrada",
-    "Saída",
-    "Min.",
+    "Visita", "Nome", "CPF", "Setor", "Crachá",
+    "Entrada", "Saída", "Min."
+]
+
+COLUNAS_SETORES = [
+    "Código", "Setor", "Lotação", "Situação", "Visitas registradas"
 ]
 
 
@@ -90,15 +90,20 @@ class JanelaPrincipal(QMainWindow):
         super().__init__()
         self.conn = conn
         self.setWindowTitle("Portaria Digital")
-        self.resize(900, 560)
+        self.resize(1000, 650)
 
         abas = QTabWidget()
         abas.addTab(self.montar_aba_portaria(), "&Portaria")
         abas.addTab(self.montar_aba_historico(), "&Histórico")
+        abas.addTab(self.montar_aba_setores(), "Se&tores")
         abas.currentChanged.connect(self.atualizar_tudo)
+
         self.setCentralWidget(abas)
+        self.statusBar().showMessage("Sistema iniciado.", 5000)
 
         self.atualizar_tudo()
+
+    # ---------- Aba Portaria ----------
 
     def montar_aba_portaria(self):
         self.campo_cpf = QLineEdit()
@@ -127,7 +132,6 @@ class JanelaPrincipal(QMainWindow):
         )
 
         self.tabela = nova_tabela(COLUNAS)
-
         self.botao_saida = QPushButton(
             "Registrar saída da visita selecionada"
         )
@@ -142,9 +146,6 @@ class JanelaPrincipal(QMainWindow):
         layout.addWidget(self.tabela)
         layout.addWidget(self.botao_saida)
         layout.addWidget(self.contador)
-
-        aba = QWidget()
-        aba.setLayout(layout)
 
         self.campo_cpf.editingFinished.connect(
             self.buscar_visitante
@@ -162,7 +163,11 @@ class JanelaPrincipal(QMainWindow):
             self.atualizar_tabela
         )
 
+        aba = QWidget()
+        aba.setLayout(layout)
         return aba
+
+    # ---------- Aba Histórico ----------
 
     def montar_aba_historico(self):
         hoje = QDate.currentDate()
@@ -179,7 +184,6 @@ class JanelaPrincipal(QMainWindow):
 
         botao_filtrar = QPushButton("&Filtrar")
         self.tabela_historico = nova_tabela(COLUNAS_HISTORICO)
-
         self.resumo = QLabel()
         self.resumo.setWordWrap(True)
 
@@ -205,34 +209,140 @@ class JanelaPrincipal(QMainWindow):
         aba.setLayout(layout)
         return aba
 
-    def carregar_setores(self):
-        setores = self._executar(
-            repo.listar_setores_ativos, self.conn
+    # ---------- Aba Setores ----------
+
+    def montar_aba_setores(self):
+        self.tabela_setores = nova_tabela(COLUNAS_SETORES)
+        self._setores = []
+
+        botao_novo = QPushButton("&Novo setor")
+        botao_editar = QPushButton("E&ditar selecionado")
+        botao_excluir = QPushButton("E&xcluir selecionado")
+
+        botao_novo.clicked.connect(self.novo_setor)
+        botao_editar.clicked.connect(self.editar_setor)
+        botao_excluir.clicked.connect(self.excluir_setor)
+        self.tabela_setores.doubleClicked.connect(
+            self.editar_setor
         )
+
+        botoes = QHBoxLayout()
+        botoes.addWidget(botao_novo)
+        botoes.addWidget(botao_editar)
+        botoes.addWidget(botao_excluir)
+        botoes.addStretch()
+
+        layout = QVBoxLayout()
+        layout.addLayout(botoes)
+        layout.addWidget(self.tabela_setores)
+
+        aba = QWidget()
+        aba.setLayout(layout)
+        return aba
+
+    def atualizar_setores(self):
+        setores = self._executar(repo.listar_setores, self.conn)
+
         if setores is FALHA:
             return
 
-        selecionado = self.combo_setor.currentData()
-        self.combo_setor.clear()
-        self.combo_setor.addItem("Selecione um setor", None)
+        self._setores = setores
 
-        for s in setores:
-            ocupacao = self._executar(
-                repo.contar_presentes_no_setor,
+        preencher_tabela(
+            self.tabela_setores,
+            [
+                [
+                    s["id"],
+                    s["nome"],
+                    s["lotacao_maxima"],
+                    "Ativo" if s["ativo"] else "Inativo",
+                    s["total_visitas"],
+                ]
+                for s in setores
+            ],
+        )
+
+    def setor_selecionado(self):
+        linha = self.tabela_setores.currentRow()
+
+        if linha < 0:
+            self._avisar("Selecione um setor na tabela.")
+            return None
+
+        setor_id = int(self.tabela_setores.item(linha, 0).text())
+
+        return next(
+            (s for s in self._setores if s["id"] == setor_id),
+            None,
+        )
+
+    def novo_setor(self):
+        dialogo = DialogoSetor(self)
+
+        if dialogo.exec() == QDialog.DialogCode.Accepted:
+            dados = dialogo.dados()
+
+            resultado = self._executar(
+                servicos.salvar_setor,
                 self.conn,
-                s["id"],
-            )
-            if ocupacao is FALHA:
-                return
-
-            self.combo_setor.addItem(
-                f"{s['nome']} "
-                f"({ocupacao}/{s['lotacao_maxima']})",
-                s["id"],
+                dados["nome"],
+                dados["lotacao_maxima"],
             )
 
-        indice = self.combo_setor.findData(selecionado)
-        self.combo_setor.setCurrentIndex(max(indice, 0))
+            if resultado is not FALHA:
+                self.atualizar_tudo()
+
+    def editar_setor(self):
+        setor = self.setor_selecionado()
+
+        if setor is None:
+            return
+
+        dialogo = DialogoSetor(self, setor)
+
+        if dialogo.exec() == QDialog.DialogCode.Accepted:
+            dados = dialogo.dados()
+
+            resultado = self._executar(
+                servicos.salvar_setor,
+                self.conn,
+                dados["nome"],
+                dados["lotacao_maxima"],
+                dados["ativo"],
+                setor["id"],
+            )
+
+            if resultado is not FALHA:
+                self.atualizar_tudo()
+
+    def excluir_setor(self):
+        setor = self.setor_selecionado()
+
+        if setor is None:
+            return
+
+        resposta = QMessageBox.question(
+            self,
+            "Portaria Digital",
+            f"Excluir o setor {setor['nome']}?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if resposta != QMessageBox.StandardButton.Yes:
+            return
+
+        resultado = self._executar(
+            servicos.excluir_setor,
+            self.conn,
+            setor["id"],
+        )
+
+        if resultado is not FALHA:
+            self.atualizar_tudo()
+
+    # ---------- Visitantes e visitas ----------
 
     def buscar_visitante(self):
         cpf = normalizar_documento(self.campo_cpf.text())
@@ -242,6 +352,7 @@ class JanelaPrincipal(QMainWindow):
             self.conn,
             cpf,
         )
+
         if visitante is FALHA:
             return
 
@@ -282,7 +393,7 @@ class JanelaPrincipal(QMainWindow):
 
         if self._executar(operacao) is FALHA:
             self.mensagem.setText(
-                "Entrada não registrada. Corrija os dados e tente de novo."
+                "Entrada não registrada. Corrija os dados e tente novamente."
             )
             return
 
@@ -313,15 +424,52 @@ class JanelaPrincipal(QMainWindow):
             )
             self.atualizar_tudo()
 
+    # ---------- Atualização das telas ----------
+
     def atualizar_tudo(self, *_):
         self.carregar_setores()
         self.atualizar_tabela()
         self.atualizar_historico()
+        self.atualizar_setores()
+
+    def carregar_setores(self):
+        setores = self._executar(
+            repo.listar_setores_ativos,
+            self.conn,
+        )
+
+        if setores is FALHA:
+            return
+
+        selecionado = self.combo_setor.currentData()
+        self.combo_setor.clear()
+        self.combo_setor.addItem("Selecione um setor", None)
+
+        for setor in setores:
+            ocupacao = self._executar(
+                repo.contar_presentes_no_setor,
+                self.conn,
+                setor["id"],
+            )
+
+            if ocupacao is FALHA:
+                return
+
+            self.combo_setor.addItem(
+                f"{setor['nome']} ({ocupacao}/{setor['lotacao_maxima']})",
+                setor["id"],
+            )
+
+        self.combo_setor.setCurrentIndex(
+            max(self.combo_setor.findData(selecionado), 0)
+        )
 
     def atualizar_tabela(self):
         presentes = self._executar(
-            repo.listar_presentes, self.conn
+            repo.listar_presentes,
+            self.conn,
         )
+
         if presentes is FALHA:
             return
 
@@ -343,8 +491,10 @@ class JanelaPrincipal(QMainWindow):
         preencher_tabela(self.tabela, linhas)
 
         crachas = self._executar(
-            repo.contar_crachas_por_situacao, self.conn
+            repo.contar_crachas_por_situacao,
+            self.conn,
         )
+
         if crachas is FALHA:
             return
 
@@ -364,6 +514,7 @@ class JanelaPrincipal(QMainWindow):
             fim,
             self.campo_busca.text(),
         )
+
         if linhas is FALHA:
             return
 
@@ -390,6 +541,7 @@ class JanelaPrincipal(QMainWindow):
             inicio,
             fim,
         )
+
         if resumos is FALHA:
             return
 
@@ -406,6 +558,8 @@ class JanelaPrincipal(QMainWindow):
         self.resumo.setText(
             "Resumo do período. " + "; ".join(partes)
         )
+
+    # ---------- Campos e erros ----------
 
     def limpar_campos(self):
         self.campo_cpf.clear()
@@ -427,6 +581,7 @@ class JanelaPrincipal(QMainWindow):
                 "Falha de banco em %s",
                 getattr(funcao, "__name__", "operação"),
             )
+
             QMessageBox.critical(
                 self,
                 "Portaria Digital",

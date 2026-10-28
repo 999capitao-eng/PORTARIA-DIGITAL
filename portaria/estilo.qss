@@ -1,0 +1,198 @@
+/* Portaria Digital: folha de estilo da aplicação (Qt Style Sheets).
+   Cada marcador (cifrão seguido do nome de um token) é trocado pelo
+   valor do tema em tema.py. Não use cifrão em comentários. */
+
+/* ---------- base ---------- */
+QWidget {
+    font-size: 11pt;
+    color: $texto;
+}
+
+QMainWindow, QDialog {
+    background-color: $fundo;
+}
+
+QStatusBar {
+    color: $texto_suave;
+}
+
+/* ---------- abas ---------- */
+QTabWidget::pane {
+    background-color: $superficie;
+    border: 1px solid $borda;
+    border-radius: $raio;
+}
+
+QTabBar::tab {
+    padding: 6px 16px;
+    color: $texto_suave;
+    background-color: $fundo;
+    border: 1px solid $borda;
+    border-bottom: none;
+    border-top-left-radius: $raio;
+    border-top-right-radius: $raio;
+}
+
+QTabBar::tab:selected {
+    color: $texto;
+    background-color: $superficie;
+    font-weight: bold;
+}
+
+/* ---------- campos ---------- */
+QLineEdit, QComboBox, QSpinBox, QDateEdit {
+    padding: 5px 8px;
+    background-color: $superficie;
+    border: 1px solid $borda;
+    border-radius: $raio;
+}
+
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus {
+    border: 2px solid $primaria;
+}
+
+QLineEdit:read-only {
+    color: $texto_suave;
+    background-color: $fundo;
+}
+
+/* Ao estilizar a borda do campo, as setas também precisam de estilo. */
+QComboBox::drop-down, QDateEdit::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 26px;
+    border: none;
+}
+
+QComboBox::down-arrow, QDateEdit::down-arrow {
+    image: url("$icones/seta_baixo_$tema.svg");
+    width: 12px;
+    height: 8px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    border: none;
+    background-color: transparent;
+}
+
+QSpinBox::up-button {
+    subcontrol-position: top right;
+}
+
+QSpinBox::down-button {
+    subcontrol-position: bottom right;
+}
+
+QSpinBox::up-arrow {
+    image: url("$icones/seta_cima_$tema.svg");
+    width: 10px;
+    height: 7px;
+}
+
+QSpinBox::down-arrow {
+    image: url("$icones/seta_baixo_$tema.svg");
+    width: 10px;
+    height: 7px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: $superficie;
+    selection-background-color: $selecao;
+    selection-color: $texto;
+}
+
+/* ---------- botões ---------- */
+QPushButton {
+    padding: 6px 14px;
+    background-color: $superficie;
+    border: 1px solid $borda;
+    border-radius: $raio;
+}
+
+QPushButton:hover {
+    border-color: $primaria;
+}
+
+QPushButton:pressed {
+    background-color: $selecao;
+}
+
+QPushButton:focus {
+    border: 2px solid $foco;
+}
+
+QPushButton:disabled {
+    color: $texto_suave;
+    background-color: $fundo;
+}
+
+/* variante definida no código com setProperty("variante", "primario") */
+QPushButton[variante="primario"] {
+    color: $primaria_texto;
+    background-color: $primaria;
+    border: 1px solid $primaria;
+    font-weight: bold;
+}
+
+QPushButton[variante="primario"]:hover {
+    background-color: $primaria_hover;
+}
+
+QPushButton[variante="primario"]:focus {
+    border: 2px solid $foco;
+}
+
+QPushButton[variante="perigo"] {
+    color: $perigo;
+    border: 1px solid $perigo;
+}
+
+QPushButton[variante="perigo"]:hover {
+    color: $perigo_texto;
+    background-color: $perigo;
+}
+
+/* ---------- mensagens ---------- */
+QLabel#mensagem {
+    padding: 8px;
+    color: $aviso_texto;
+    background-color: $aviso_fundo;
+    border: 1px solid $aviso_borda;
+    border-radius: $raio;
+}
+
+/* ---------- tabelas ---------- */
+QTableWidget {
+    background-color: $superficie;
+    alternate-background-color: $zebra;
+    gridline-color: $borda;
+    border: 1px solid $borda;
+    border-radius: $raio;
+    selection-background-color: $selecao;
+    selection-color: $texto;
+}
+
+QHeaderView::section {
+    padding: 6px;
+    color: $texto;
+    background-color: $fundo;
+    border: none;
+    border-bottom: 1px solid $borda;
+    font-weight: bold;
+}
+
+/* ---------- menu ---------- */
+QMenuBar {
+    background-color: $fundo;
+}
+
+QMenuBar::item:selected, QMenu::item:selected {
+    background-color: $selecao;
+}
+
+QMenu {
+    background-color: $superficie;
+    border: 1px solid $borda;
+}

@@ -20,17 +20,3 @@ def preparar_banco(conn):
             "INSERT OR IGNORE INTO cracha (codigo) VALUES (?)",
             [(f"V-{n:02d}",) for n in range(1, 11)],
         )
-Path(__file__).with_name("schema.sql")
-→ acha o esquema ao lado de db.py, de onde quer que o programa seja aberto
-
-row_factory = sqlite3.Row
-→ linha["nome"] em vez de linha[1]
-
-PRAGMA foreign_keys = ON
-→ no SQLite, chaves estrangeiras vêm DESLIGADAS; é preciso ligar em cada conexão
-
-executescript
-→ executa vários comandos SQL de uma vez (o esquema inteiro)
-
-INSERT OR IGNORE
-→ não duplica setores e crachás quando o programa abre de novo

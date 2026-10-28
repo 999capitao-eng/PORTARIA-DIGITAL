@@ -1,6 +1,5 @@
 
 import sqlite3
-from datetime import datetime
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,18 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from portaria import repositorio as repo
+from portaria import servicos
+from portaria.erros import RegraNegocioError
 from portaria.validacao import (
-    cpf_valido,
     mascarar_documento,
     normalizar_documento,
 )
-from portaria import repositorio as repo
 
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
-
-
-def agora():
-    return datetime.now().isoformat(sep=" ", timespec="seconds")
 
 
 class JanelaPrincipal(QWidget):
@@ -112,19 +108,26 @@ class JanelaPrincipal(QWidget):
             self.atualizar_tabela
         )
 
-        self.carregar_setores()
-        self.atualizar_tabela()
+        self.atualizar_tudo()
 
     def carregar_setores(self):
+        """Mostra a ocupação atual de cada setor."""
+        selecionado = self.combo_setor.currentData()
         self.combo_setor.clear()
         self.combo_setor.addItem("Selecione um setor", None)
 
-        linhas = self.conn.execute(
-            "SELECT id, nome FROM setor WHERE ativo = 1 ORDER BY nome"
-        ).fetchall()
+        for s in repo.listar_setores_ativos(self.conn):
+            ocupacao = repo.contar_presentes_no_setor(
+                self.conn, s["id"]
+            )
+            self.combo_setor.addItem(
+                f"{s['nome']} ({ocupacao}/{s['lotacao_maxima']})",
+                s["id"],
+            )
 
-        for linha in linhas:
-            self.combo_setor.addItem(linha["nome"], linha["id"])
+        self.combo_setor.setCurrentIndex(
+            max(self.combo_setor.findData(selecionado), 0)
+        )
 
     def buscar_visitante(self):
         cpf = normalizar_documento(self.campo_cpf.text())
@@ -143,24 +146,8 @@ class JanelaPrincipal(QWidget):
             self.campo_nome.setReadOnly(False)
 
     def registrar_entrada(self):
-        cpf = normalizar_documento(self.campo_cpf.text())
-        nome = " ".join(self.campo_nome.text().split())
+        documento = self.campo_cpf.text()
         setor_id = self.combo_setor.currentData()
-
-        # Validações iniciais
-        if not cpf_valido(cpf):
-            self.mensagem.setText(
-                "CPF inválido. Confira os 11 dígitos."
-            )
-            self.campo_cpf.setFocus()
-            return
-
-        if not nome:
-            self.mensagem.setText(
-                "Informe o nome do visitante."
-            )
-            self.campo_nome.setFocus()
-            return
 
         if setor_id is None:
             self.mensagem.setText(
@@ -169,59 +156,26 @@ class JanelaPrincipal(QWidget):
             return
 
         try:
-            with self.conn:
-                visitante = self.conn.execute(
-                    "SELECT id FROM visitante WHERE documento = ?",
-                    (cpf,),
-                ).fetchone()
+            cpf = normalizar_documento(documento)
 
-                if visitante is None:
-                    visitante_id = self.conn.execute(
-                        "INSERT INTO visitante (nome, documento) "
-                        "VALUES (?, ?)",
-                        (nome, cpf),
-                    ).lastrowid
-                else:
-                    visitante_id = visitante["id"]
-
-                aberta = self.conn.execute(
-                    "SELECT 1 FROM visita "
-                    "WHERE visitante_id = ? AND saida IS NULL",
-                    (visitante_id,),
-                ).fetchone()
-
-                if aberta:
-                    self.mensagem.setText(
-                        f"{nome} já está no prédio. "
-                        "Registre a saída antes."
-                    )
-                    return
-
-                cracha = self.conn.execute(
-                    "SELECT id, codigo FROM cracha "
-                    "WHERE situacao = 'disponivel' "
-                    "ORDER BY codigo LIMIT 1"
-                ).fetchone()
-
-                if cracha is None:
-                    self.mensagem.setText(
-                        "Não há crachá disponível. "
-                        "Aguarde uma devolução."
-                    )
-                    return
-
-                self.conn.execute(
-                    "INSERT INTO visita "
-                    "(visitante_id, setor_id, cracha_id, entrada) "
-                    "VALUES (?, ?, ?, ?)",
-                    (visitante_id, setor_id, cracha["id"], agora()),
+            if repo.buscar_visitante_por_documento(
+                self.conn, cpf
+            ) is None:
+                servicos.cadastrar_visitante(
+                    self.conn,
+                    self.campo_nome.text(),
+                    documento,
                 )
 
-                self.conn.execute(
-                    "UPDATE cracha SET situacao = 'em_uso' "
-                    "WHERE id = ?",
-                    (cracha["id"],),
-                )
+            servicos.registrar_entrada(
+                self.conn,
+                documento,
+                setor_id,
+            )
+
+        except RegraNegocioError as erro:
+            self.mensagem.setText(str(erro))
+            return
 
         except sqlite3.Error as erro:
             QMessageBox.critical(
@@ -233,9 +187,9 @@ class JanelaPrincipal(QWidget):
 
         self.limpar_campos()
         self.mensagem.setText(
-            f"Entrada registrada. Entregue o crachá {cracha['codigo']}."
+            "Entrada registrada. Entregue o crachá indicado na tabela."
         )
-        self.atualizar_tabela()
+        self.atualizar_tudo()
 
     def registrar_saida(self):
         linha = self.tabela.currentRow()
@@ -249,29 +203,13 @@ class JanelaPrincipal(QWidget):
         visita_id = int(self.tabela.item(linha, 0).text())
 
         try:
-            with self.conn:
-                visita = self.conn.execute(
-                    "SELECT cracha_id FROM visita "
-                    "WHERE id = ? AND saida IS NULL",
-                    (visita_id,),
-                ).fetchone()
+            servicos.registrar_saida(
+                self.conn, visita_id
+            )
 
-                if visita is None:
-                    self.mensagem.setText(
-                        "Esta visita já foi encerrada."
-                    )
-                    return
-
-                self.conn.execute(
-                    "UPDATE visita SET saida = ? WHERE id = ?",
-                    (agora(), visita_id),
-                )
-
-                self.conn.execute(
-                    "UPDATE cracha SET situacao = 'disponivel' "
-                    "WHERE id = ?",
-                    (visita["cracha_id"],),
-                )
+        except RegraNegocioError as erro:
+            self.mensagem.setText(str(erro))
+            return
 
         except sqlite3.Error as erro:
             QMessageBox.critical(
@@ -284,25 +222,23 @@ class JanelaPrincipal(QWidget):
         self.mensagem.setText(
             "Saída registrada. Crachá devolvido."
         )
+        self.atualizar_tudo()
+
+    def atualizar_tudo(self):
+        self.carregar_setores()
         self.atualizar_tabela()
 
     def atualizar_tabela(self):
-        termo = f"%{self.campo_filtro.text().strip()}%"
+        # Consulta os presentes pelo repositório.
+        presentes = repo.listar_presentes(self.conn)
 
-        linhas = self.conn.execute(
-            """
-            SELECT v.id, p.nome, p.documento, s.nome AS setor,
-                   c.codigo AS cracha, v.entrada
-              FROM visita v
-              JOIN visitante p ON p.id = v.visitante_id
-              JOIN setor s     ON s.id = v.setor_id
-              JOIN cracha c    ON c.id = v.cracha_id
-             WHERE v.saida IS NULL
-               AND (p.nome LIKE ? OR s.nome LIKE ?)
-             ORDER BY v.entrada
-            """,
-            (termo, termo),
-        ).fetchall()
+        termo = self.campo_filtro.text().strip().lower()
+
+        linhas = [
+            l
+            for l in presentes
+            if termo in f"{l['nome']} {l['setor']}".lower()
+        ]
 
         self.tabela.setRowCount(len(linhas))
 
@@ -325,17 +261,13 @@ class JanelaPrincipal(QWidget):
 
         self.tabela.setCurrentCell(-1, -1)
 
-        total = self.conn.execute(
-            "SELECT COUNT(*) FROM visita WHERE saida IS NULL"
-        ).fetchone()[0]
-
-        livres = self.conn.execute(
-            "SELECT COUNT(*) FROM cracha "
-            "WHERE situacao = 'disponivel'"
-        ).fetchone()[0]
+        crachas = repo.contar_crachas_por_situacao(
+            self.conn
+        )
 
         self.contador.setText(
-            f"No prédio: {total} | Crachás livres: {livres}"
+            f"No prédio: {len(presentes)} | "
+            f"Crachás livres: {crachas.get('disponivel', 0)}"
         )
 
     def limpar_campos(self):

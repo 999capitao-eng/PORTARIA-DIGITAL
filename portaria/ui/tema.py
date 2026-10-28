@@ -6,7 +6,7 @@ TEMAS = {
     "claro": {
         "fundo": "#F4F6F8",
         "superficie": "#FFFFFF",
-        "alternada": "#F8FAFC",
+        "zebra": "#F8FAFC",
         "texto": "#1F2933",
         "texto_suave": "#52606D",
         "borda": "#CBD2D9",
@@ -18,11 +18,13 @@ TEMAS = {
         "perigo_texto": "#FFFFFF",
         "selecao": "#DBEAFE",
         "selecao_texto": "#1F2933",
+        "aviso_fundo": "#FEF3C7",
+        "aviso_texto": "#7A2E0E",
     },
     "escuro": {
         "fundo": "#111827",
         "superficie": "#1F2937",
-        "alternada": "#243041",
+        "zebra": "#243041",
         "texto": "#F3F4F6",
         "texto_suave": "#A8B3C2",
         "borda": "#374151",
@@ -34,6 +36,8 @@ TEMAS = {
         "perigo_texto": "#1F0A0A",
         "selecao": "#1E3A8A",
         "selecao_texto": "#FFFFFF",
+        "aviso_fundo": "#78350F",
+        "aviso_texto": "#FEF3C7",
     },
 }
 
@@ -121,7 +125,7 @@ QComboBox QAbstractItemView {
 }
 QTableWidget {
     background-color: $superficie;
-    alternate-background-color: $alternada;
+    alternate-background-color: $zebra;
     color: $texto;
     gridline-color: $borda;
     border: 1px solid $borda;
@@ -170,6 +174,12 @@ QLabel {
 }
 QLabel#mensagem {
     color: $texto_suave;
+}
+QLabel#aviso {
+    background-color: $aviso_fundo;
+    color: $aviso_texto;
+    padding: 6px;
+    border-radius: 4px;
 }
 QStatusBar {
     background-color: $superficie;

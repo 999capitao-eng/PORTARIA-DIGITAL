@@ -1,4 +1,4 @@
-
+﻿
 """Funções puras de validação: não dependem da interface nem do banco."""
 
 import re
@@ -23,7 +23,7 @@ def cpf_valido(valor: str | None) -> bool:
     """
     d = normalizar_documento(valor)
 
-    if len(d) != 11 or d == "0" * 11:
+    if len(d) != 11 or len(set(d)) == 1:
         return False
 
     for posicao in (9, 10):
@@ -47,3 +47,4 @@ def mascarar_documento(valor: str | None) -> str:
         return "***"
 
     return f"***.{d[3:6]}.{d[6:9]}-**"
+

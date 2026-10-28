@@ -1,16 +1,20 @@
 
 import sqlite3
 
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDateEdit,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMainWindow,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -25,17 +29,73 @@ from portaria.validacao import (
     normalizar_documento,
 )
 
-COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
+COLUNAS = [
+    "Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"
+]
+
+COLUNAS_HISTORICO = [
+    "Visita", "Nome", "CPF", "Setor",
+    "Crachá", "Entrada", "Saída", "Min."
+]
 
 
-class JanelaPrincipal(QWidget):
+def nova_tabela(colunas):
+    tabela = QTableWidget(0, len(colunas))
+    tabela.setHorizontalHeaderLabels(colunas)
+    tabela.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    tabela.setSelectionBehavior(QAbstractItemView.SelectRows)
+    tabela.setSelectionMode(
+        QAbstractItemView.SingleSelection
+    )
+    tabela.horizontalHeader().setSectionResizeMode(
+        QHeaderView.Stretch
+    )
+    tabela.horizontalHeader().setSectionResizeMode(
+        0, QHeaderView.ResizeToContents
+    )
+    tabela.verticalHeader().setVisible(False)
+    return tabela
+
+
+def preencher_tabela(tabela, linhas):
+    tabela.setRowCount(len(linhas))
+
+    for i, valores in enumerate(linhas):
+        for j, valor in enumerate(valores):
+            tabela.setItem(
+                i,
+                j,
+                QTableWidgetItem(
+                    "" if valor is None else str(valor)
+                ),
+            )
+
+    tabela.setCurrentCell(-1, -1)
+
+
+class JanelaPrincipal(QMainWindow):
     def __init__(self, conn):
         super().__init__()
         self.conn = conn
-        self.setWindowTitle("Portaria Digital")
-        self.resize(830, 520)
 
-        # Formulário
+        self.setWindowTitle("Portaria Digital")
+        self.resize(1000, 600)
+
+        abas = QTabWidget()
+        abas.addTab(
+            self.montar_aba_portaria(),
+            "&Portaria",
+        )
+        abas.addTab(
+            self.montar_aba_historico(),
+            "&Histórico",
+        )
+        abas.currentChanged.connect(self.atualizar_tudo)
+
+        self.setCentralWidget(abas)
+        self.atualizar_tudo()
+
+    def montar_aba_portaria(self):
         self.campo_cpf = QLineEdit()
         self.campo_cpf.setPlaceholderText("Somente números")
         self.campo_cpf.setMaxLength(14)
@@ -56,24 +116,12 @@ class JanelaPrincipal(QWidget):
         botoes.addWidget(self.botao_entrada)
         botoes.addWidget(self.botao_limpar)
 
-        # Tabela de visitantes presentes
         self.campo_filtro = QLineEdit()
         self.campo_filtro.setPlaceholderText(
             "Filtrar por nome ou setor"
         )
 
-        self.tabela = QTableWidget(0, len(COLUNAS))
-        self.tabela.setHorizontalHeaderLabels(COLUNAS)
-        self.tabela.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self.tabela.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self.tabela.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.tabela.verticalHeader().setVisible(False)
+        self.tabela = nova_tabela(COLUNAS)
 
         self.botao_saida = QPushButton(
             "Registrar saída da visita selecionada"
@@ -89,9 +137,7 @@ class JanelaPrincipal(QWidget):
         layout.addWidget(self.tabela)
         layout.addWidget(self.botao_saida)
         layout.addWidget(self.contador)
-        self.setLayout(layout)
 
-        # Eventos
         self.campo_cpf.editingFinished.connect(
             self.buscar_visitante
         )
@@ -108,32 +154,91 @@ class JanelaPrincipal(QWidget):
             self.atualizar_tabela
         )
 
-        self.atualizar_tudo()
+        aba = QWidget()
+        aba.setLayout(layout)
+        return aba
 
-    def carregar_setores(self):
-        """Mostra a ocupação atual de cada setor."""
-        selecionado = self.combo_setor.currentData()
-        self.combo_setor.clear()
-        self.combo_setor.addItem("Selecione um setor", None)
+    def montar_aba_historico(self):
+        hoje = QDate.currentDate()
 
-        for s in repo.listar_setores_ativos(self.conn):
-            ocupacao = repo.contar_presentes_no_setor(
-                self.conn, s["id"]
-            )
-            self.combo_setor.addItem(
-                f"{s['nome']} ({ocupacao}/{s['lotacao_maxima']})",
-                s["id"],
-            )
+        self.data_inicio = QDateEdit(hoje.addDays(-7))
+        self.data_fim = QDateEdit(hoje)
 
-        self.combo_setor.setCurrentIndex(
-            max(self.combo_setor.findData(selecionado), 0)
+        for campo in (self.data_inicio, self.data_fim):
+            campo.setCalendarPopup(True)
+            campo.setDisplayFormat("dd/MM/yyyy")
+
+        self.campo_busca = QLineEdit()
+        self.campo_busca.setPlaceholderText("Nome ou setor")
+
+        botao_filtrar = QPushButton("&Filtrar")
+        self.tabela_historico = nova_tabela(
+            COLUNAS_HISTORICO
+        )
+        self.resumo = QLabel()
+        self.resumo.setWordWrap(True)
+
+        botao_filtrar.clicked.connect(
+            self.atualizar_historico
+        )
+        self.campo_busca.returnPressed.connect(
+            self.atualizar_historico
+        )
+        self.data_inicio.dateChanged.connect(
+            self.atualizar_historico
+        )
+        self.data_fim.dateChanged.connect(
+            self.atualizar_historico
         )
 
+        filtros = QHBoxLayout()
+        filtros.addWidget(QLabel("De:"))
+        filtros.addWidget(self.data_inicio)
+        filtros.addWidget(QLabel("Até:"))
+        filtros.addWidget(self.data_fim)
+        filtros.addWidget(self.campo_busca, 1)
+        filtros.addWidget(botao_filtrar)
+
+        layout = QVBoxLayout()
+        layout.addLayout(filtros)
+        layout.addWidget(self.tabela_historico)
+        layout.addWidget(self.resumo)
+
+        aba = QWidget()
+        aba.setLayout(layout)
+        return aba
+
+    def carregar_setores(self):
+        selecionado = self.combo_setor.currentData()
+
+        self.combo_setor.clear()
+        self.combo_setor.addItem(
+            "Selecione um setor",
+            None,
+        )
+
+        for setor in repo.listar_setores_ativos(self.conn):
+            ocupacao = repo.contar_presentes_no_setor(
+                self.conn,
+                setor["id"],
+            )
+            self.combo_setor.addItem(
+                f'{setor["nome"]} '
+                f'({ocupacao}/{setor["lotacao_maxima"]})',
+                setor["id"],
+            )
+
+        indice = self.combo_setor.findData(selecionado)
+        self.combo_setor.setCurrentIndex(max(indice, 0))
+
     def buscar_visitante(self):
-        cpf = normalizar_documento(self.campo_cpf.text())
+        cpf = normalizar_documento(
+            self.campo_cpf.text()
+        )
 
         visitante = repo.buscar_visitante_por_documento(
-            self.conn, cpf
+            self.conn,
+            cpf,
         )
 
         if visitante:
@@ -159,7 +264,8 @@ class JanelaPrincipal(QWidget):
             cpf = normalizar_documento(documento)
 
             if repo.buscar_visitante_por_documento(
-                self.conn, cpf
+                self.conn,
+                cpf,
             ) is None:
                 servicos.cadastrar_visitante(
                     self.conn,
@@ -177,17 +283,18 @@ class JanelaPrincipal(QWidget):
             self.mensagem.setText(str(erro))
             return
 
-        except sqlite3.Error as erro:
+        except sqlite3.Error:
             QMessageBox.critical(
                 self,
                 "Portaria Digital",
-                f"Erro no banco: {erro}",
+                "Não foi possível registrar a entrada por "
+                "um erro no banco de dados.",
             )
             return
 
         self.limpar_campos()
         self.mensagem.setText(
-            "Entrada registrada. Entregue o crachá indicado na tabela."
+            "Entrada registrada. Confira o crachá na tabela."
         )
         self.atualizar_tudo()
 
@@ -200,22 +307,26 @@ class JanelaPrincipal(QWidget):
             )
             return
 
-        visita_id = int(self.tabela.item(linha, 0).text())
+        visita_id = int(
+            self.tabela.item(linha, 0).text()
+        )
 
         try:
             servicos.registrar_saida(
-                self.conn, visita_id
+                self.conn,
+                visita_id,
             )
 
         except RegraNegocioError as erro:
             self.mensagem.setText(str(erro))
             return
 
-        except sqlite3.Error as erro:
+        except sqlite3.Error:
             QMessageBox.critical(
                 self,
                 "Portaria Digital",
-                f"Erro no banco: {erro}",
+                "Não foi possível registrar a saída por "
+                "um erro no banco de dados.",
             )
             return
 
@@ -224,26 +335,24 @@ class JanelaPrincipal(QWidget):
         )
         self.atualizar_tudo()
 
-    def atualizar_tudo(self):
-        self.carregar_setores()
-        self.atualizar_tabela()
+    def atualizar_tudo(self, *_):
+        try:
+            self.carregar_setores()
+            self.atualizar_tabela()
+            self.atualizar_historico()
+        except sqlite3.Error:
+            QMessageBox.critical(
+                self,
+                "Portaria Digital",
+                "Não foi possível atualizar os dados.",
+            )
 
-    def atualizar_tabela(self):
-        # Consulta os presentes pelo repositório.
+    def atualizar_tabela(self, *_):
         presentes = repo.listar_presentes(self.conn)
-
         termo = self.campo_filtro.text().strip().lower()
 
         linhas = [
-            l
-            for l in presentes
-            if termo in f"{l['nome']} {l['setor']}".lower()
-        ]
-
-        self.tabela.setRowCount(len(linhas))
-
-        for i, l in enumerate(linhas):
-            valores = [
+            [
                 l["id"],
                 l["nome"],
                 mascarar_documento(l["documento"]),
@@ -251,23 +360,87 @@ class JanelaPrincipal(QWidget):
                 l["cracha"],
                 l["entrada"],
             ]
+            for l in presentes
+            if termo in (
+                f'{l["nome"]} {l["setor"]}'.lower()
+            )
+        ]
 
-            for j, valor in enumerate(valores):
-                self.tabela.setItem(
-                    i,
-                    j,
-                    QTableWidgetItem(str(valor)),
-                )
-
-        self.tabela.setCurrentCell(-1, -1)
+        preencher_tabela(self.tabela, linhas)
 
         crachas = repo.contar_crachas_por_situacao(
             self.conn
         )
-
         self.contador.setText(
             f"No prédio: {len(presentes)} | "
-            f"Crachás livres: {crachas.get('disponivel', 0)}"
+            f"Crachás livres: "
+            f'{crachas.get("disponivel", 0)}'
+        )
+
+    def atualizar_historico(self, *_):
+        inicio = self.data_inicio.date().toString(
+            "yyyy-MM-dd"
+        )
+        fim = self.data_fim.date().toString(
+            "yyyy-MM-dd"
+        )
+
+        if inicio > fim:
+            preencher_tabela(
+                self.tabela_historico,
+                [],
+            )
+            self.resumo.setText(
+                "A data inicial não pode ser posterior "
+                "à data final."
+            )
+            return
+
+        linhas = repo.listar_historico(
+            self.conn,
+            inicio,
+            fim,
+            self.campo_busca.text(),
+        )
+
+        preencher_tabela(
+            self.tabela_historico,
+            [
+                [
+                    l["id"],
+                    l["nome"],
+                    mascarar_documento(l["documento"]),
+                    l["setor"],
+                    l["cracha"],
+                    l["entrada"],
+                    l["saida"] or "no prédio",
+                    l["minutos"],
+                ]
+                for l in linhas
+            ],
+        )
+
+        partes = []
+
+        for r in repo.resumo_por_setor(
+            self.conn,
+            inicio,
+            fim,
+        ):
+            texto = (
+                f'{r["setor"]}: {r["visitas"]} visita(s)'
+            )
+
+            if r["media_minutos"] is not None:
+                texto += (
+                    f', média de {r["media_minutos"]} min'
+                )
+
+            partes.append(texto)
+
+        self.resumo.setText(
+            "Resumo do período. "
+            + "; ".join(partes)
         )
 
     def limpar_campos(self):

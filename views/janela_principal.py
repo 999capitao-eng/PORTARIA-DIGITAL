@@ -44,7 +44,6 @@ class JanelaPrincipal(QWidget):
         self.campo_cpf.setMaxLength(14)
 
         self.campo_nome = QLineEdit()
-
         self.combo_setor = QComboBox()
 
         self.botao_entrada = QPushButton("Registrar entrada")
@@ -60,7 +59,7 @@ class JanelaPrincipal(QWidget):
         botoes.addWidget(self.botao_entrada)
         botoes.addWidget(self.botao_limpar)
 
-        # Tabela de presentes
+        # Tabela de visitantes presentes
         self.campo_filtro = QLineEdit()
         self.campo_filtro.setPlaceholderText(
             "Filtrar por nome ou setor"
@@ -130,7 +129,8 @@ class JanelaPrincipal(QWidget):
         cpf = normalizar_documento(self.campo_cpf.text())
 
         linha = self.conn.execute(
-            "SELECT nome FROM visitante WHERE documento = ?", (cpf,)
+            "SELECT nome FROM visitante WHERE documento = ?",
+            (cpf,),
         ).fetchone()
 
         if linha:
@@ -147,6 +147,7 @@ class JanelaPrincipal(QWidget):
         nome = " ".join(self.campo_nome.text().split())
         setor_id = self.combo_setor.currentData()
 
+        # Validações iniciais
         if not cpf_valido(cpf):
             self.mensagem.setText(
                 "CPF inválido. Confira os 11 dígitos."
@@ -167,52 +168,72 @@ class JanelaPrincipal(QWidget):
             )
             return
 
-        visitante = self.conn.execute(
-            "SELECT id FROM visitante WHERE documento = ?", (cpf,)
-        ).fetchone()
+        try:
+            with self.conn:
+                visitante = self.conn.execute(
+                    "SELECT id FROM visitante WHERE documento = ?",
+                    (cpf,),
+                ).fetchone()
 
-        if visitante is None:
-            visitante_id = self.conn.execute(
-                "INSERT INTO visitante (nome, documento) VALUES (?, ?)",
-                (nome, cpf),
-            ).lastrowid
-        else:
-            visitante_id = visitante["id"]
+                if visitante is None:
+                    visitante_id = self.conn.execute(
+                        "INSERT INTO visitante (nome, documento) "
+                        "VALUES (?, ?)",
+                        (nome, cpf),
+                    ).lastrowid
+                else:
+                    visitante_id = visitante["id"]
 
-        aberta = self.conn.execute(
-            "SELECT 1 FROM visita WHERE visitante_id = ? AND saida IS NULL",
-            (visitante_id,),
-        ).fetchone()
+                aberta = self.conn.execute(
+                    "SELECT 1 FROM visita "
+                    "WHERE visitante_id = ? AND saida IS NULL",
+                    (visitante_id,),
+                ).fetchone()
 
-        if aberta:
-            self.mensagem.setText(
-                f"{nome} já está no prédio. Registre a saída antes."
+                if aberta:
+                    self.mensagem.setText(
+                        f"{nome} já está no prédio. "
+                        "Registre a saída antes."
+                    )
+                    return
+
+                cracha = self.conn.execute(
+                    "SELECT id, codigo FROM cracha "
+                    "WHERE situacao = 'disponivel' "
+                    "ORDER BY codigo LIMIT 1"
+                ).fetchone()
+
+                if cracha is None:
+                    self.mensagem.setText(
+                        "Não há crachá disponível. "
+                        "Aguarde uma devolução."
+                    )
+                    return
+
+                self.conn.execute(
+                    "INSERT INTO visita "
+                    "(visitante_id, setor_id, cracha_id, entrada) "
+                    "VALUES (?, ?, ?, ?)",
+                    (visitante_id, setor_id, cracha["id"], agora()),
+                )
+
+                # Falha simulada: use apenas durante o teste.
+                # if nome == "Teste Falha":
+                #     raise RuntimeError("falha simulada")
+
+                self.conn.execute(
+                    "UPDATE cracha SET situacao = 'em_uso' "
+                    "WHERE id = ?",
+                    (cracha["id"],),
+                )
+
+        except sqlite3.Error as erro:
+            QMessageBox.critical(
+                self,
+                "Portaria Digital",
+                f"Erro no banco: {erro}",
             )
             return
-
-        cracha = self.conn.execute(
-            "SELECT id, codigo FROM cracha WHERE situacao = 'disponivel' "
-            "ORDER BY codigo LIMIT 1"
-        ).fetchone()
-
-        if cracha is None:
-            self.mensagem.setText(
-                "Não há crachá disponível. Aguarde uma devolução."
-            )
-            return
-
-        self.conn.execute(
-            "INSERT INTO visita (visitante_id, setor_id, cracha_id, entrada) "
-            "VALUES (?, ?, ?, ?)",
-            (visitante_id, setor_id, cracha["id"], agora()),
-        )
-
-        self.conn.execute(
-            "UPDATE cracha SET situacao = 'em_uso' WHERE id = ?",
-            (cracha["id"],),
-        )
-
-        self.conn.commit()
 
         self.limpar_campos()
         self.mensagem.setText(
@@ -221,9 +242,53 @@ class JanelaPrincipal(QWidget):
         self.atualizar_tabela()
 
     def registrar_saida(self):
+        linha = self.tabela.currentRow()
+
+        if linha < 0:
+            self.mensagem.setText(
+                "Selecione uma visita na tabela."
+            )
+            return
+
+        visita_id = int(self.tabela.item(linha, 0).text())
+
+        try:
+            with self.conn:
+                visita = self.conn.execute(
+                    "SELECT cracha_id FROM visita "
+                    "WHERE id = ? AND saida IS NULL",
+                    (visita_id,),
+                ).fetchone()
+
+                if visita is None:
+                    self.mensagem.setText(
+                        "Esta visita já foi encerrada."
+                    )
+                    return
+
+                self.conn.execute(
+                    "UPDATE visita SET saida = ? WHERE id = ?",
+                    (agora(), visita_id),
+                )
+
+                self.conn.execute(
+                    "UPDATE cracha SET situacao = 'disponivel' "
+                    "WHERE id = ?",
+                    (visita["cracha_id"],),
+                )
+
+        except sqlite3.Error as erro:
+            QMessageBox.critical(
+                self,
+                "Portaria Digital",
+                f"Erro no banco: {erro}",
+            )
+            return
+
         self.mensagem.setText(
-            "A saída será gravada na Etapa 13."
+            "Saída registrada. Crachá devolvido."
         )
+        self.atualizar_tabela()
 
     def atualizar_tabela(self):
         termo = f"%{self.campo_filtro.text().strip()}%"
@@ -269,7 +334,8 @@ class JanelaPrincipal(QWidget):
         ).fetchone()[0]
 
         livres = self.conn.execute(
-            "SELECT COUNT(*) FROM cracha WHERE situacao = 'disponivel'"
+            "SELECT COUNT(*) FROM cracha "
+            "WHERE situacao = 'disponivel'"
         ).fetchone()[0]
 
         self.contador.setText(

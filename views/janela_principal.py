@@ -23,6 +23,7 @@ from portaria.validacao import (
     mascarar_documento,
     normalizar_documento,
 )
+from portaria import repositorio as repo
 
 COLUNAS = ["Visita", "Nome", "CPF", "Setor", "Crachá", "Entrada"]
 
@@ -128,13 +129,12 @@ class JanelaPrincipal(QWidget):
     def buscar_visitante(self):
         cpf = normalizar_documento(self.campo_cpf.text())
 
-        linha = self.conn.execute(
-            "SELECT nome FROM visitante WHERE documento = ?",
-            (cpf,),
-        ).fetchone()
+        visitante = repo.buscar_visitante_por_documento(
+            self.conn, cpf
+        )
 
-        if linha:
-            self.campo_nome.setText(linha["nome"])
+        if visitante:
+            self.campo_nome.setText(visitante["nome"])
             self.campo_nome.setReadOnly(True)
             self.mensagem.setText(
                 "Visitante já cadastrado. Escolha o setor."
@@ -216,10 +216,6 @@ class JanelaPrincipal(QWidget):
                     "VALUES (?, ?, ?, ?)",
                     (visitante_id, setor_id, cracha["id"], agora()),
                 )
-
-                # Falha simulada: use apenas durante o teste.
-                # if nome == "Teste Falha":
-                #     raise RuntimeError("falha simulada")
 
                 self.conn.execute(
                     "UPDATE cracha SET situacao = 'em_uso' "
